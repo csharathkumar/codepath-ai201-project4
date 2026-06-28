@@ -376,6 +376,30 @@ ai201-project4-provenance-guard/
 
 ---
 
+## Known Edge Cases
+
+**Short submissions (< 3 sentences).** Observed in live testing: a two-sentence
+passage — *"The sun dipped below the horizon, painting the sky in hues of amber and
+rose. I sat on the porch, coffee in hand, watching the neighborhood slowly go quiet."*
+— scored `confidence: 0.29` and received an UNCERTAIN label despite the LLM signal
+correctly reading it as human (`ai_probability: 0.20`). The stylometric signal scored
+it at `0.42` because two sentences produce near-zero sentence-length variance (no
+variance to measure) and no paragraph breaks, inflating the AI-probability estimate.
+The blend of `0.60×0.20 + 0.40×0.42 = 0.288` landed just above the high-human
+threshold of 0.28. This is the expected behavior for very short texts — the system
+defaults to uncertain rather than risk a false positive, and the stylometric signal
+explicitly degrades to neutral for texts under 20 words.
+
+**Formally written human prose.** Academic or technical writing with uniform sentence
+structure will trend AI-like on the stylometric signal. The asymmetric threshold (0.72
+to trigger a high-AI label) and the bias zone pull these cases toward uncertain.
+
+**Lightly edited AI output.** A few human edits injecting idiosyncrasy can confuse
+both signals enough to produce an uncertain result. The system acknowledges this in
+the uncertain label body ("may reflect a mix of approaches").
+
+---
+
 ## Design Decisions
 
 **Why asymmetric thresholds?**
