@@ -492,6 +492,135 @@ audit_log
 
 ---
 
+## Edge Cases
+
+Specific scenarios the system will handle poorly, and how the design mitigates them:
+
+**1. Minimalist poetry with simple, repetitive vocabulary.**
+Example: a haiku sequence, or a piece in the style of Raymond Carver — short sentences,
+plain words, deliberate repetition, almost no punctuation. The stylometric signal will
+score this as AI-like: low sentence-length variance (all sentences short), low TTR
+(repeated words by design), low punctuation density. The LLM signal may also be
+uncertain because minimalism deliberately strips the idiosyncratic markers it looks for.
+Mitigation: the asymmetric thresholds (0.72 to call AI) and the uncertain label design
+mean the system defaults to "uncertain" rather than a false AI verdict. The label
+explicitly says the system's analysis may be limited. Short texts (<20 words) degrade
+the stylometric signal to neutral (0.5).
+
+**2. Academic or technical prose written by a human expert.**
+Example: a scientist submitting a personal essay or a law student writing a short story
+in the same formal register their training demands. Uniform sentence length, smooth
+transitions, no fragments, precise vocabulary. Both signals trend AI-like. Mitigation:
+this is the primary false-positive scenario the asymmetric bias zone addresses — blends
+in [0.40, 0.65] are pulled toward uncertain. The appeal path is always surfaced in the
+label for uncertain results, giving the creator recourse.
+
+**3. Lightly edited AI output.**
+A user generates text with an LLM, then rewrites a few sentences, adds a personal
+anecdote, and introduces some typos. The injected idiosyncrasy may fool both signals
+enough to produce an "uncertain" result, even though the majority of the text is
+AI-generated. Mitigation: this is a known limitation; the system documents it honestly
+in the label ("may reflect a mix of approaches"). Perfect detection of hybrid content
+is not claimed.
+
+**4. Very short submissions (< 50 words).**
+A two-sentence poem or a single paragraph lacks enough data for the stylometric signal
+to produce reliable variance metrics. The signal degrades to 0.5 (neutral). If the LLM
+signal is also uncertain, the blend lands in the uncertain zone regardless of the actual
+origin. Mitigation: the system returns the neutral stylometric score with a `note` field
+explaining the text is too short for reliable analysis. This note is visible in the API
+response signal breakdown.
+
+---
+
+## AI Tool Plan
+
+This section maps each implementation milestone to the specific spec sections used as
+context, what is requested from the AI tool, and how the output is verified before
+it's considered done.
+
+### M3 — Submission endpoint + Signal 1 (LLM Judge)
+
+**Spec sections provided as context:**
+- Architecture narrative (7-step submission flow)
+- Submission flow diagram
+- Signal 1 definition: what it measures, output shape, prompt design
+- API contract for `POST /submit` (fields, response shape)
+
+**What to request:**
+1. Flask app skeleton: app factory, `/submit` route accepting `{ content, content_id?,
+   creator_id? }`, request validation (non-empty, ≤ 20,000 chars), and a stub response.
+2. `llm_signal(text: str) → dict` function: calls Groq with the specified system prompt,
+   parses the JSON response, converts verdict + confidence to `ai_probability: float`,
+   handles API errors gracefully by returning `{ verdict: "uncertain", ai_probability: 0.5 }`.
+
+**Verification before wiring into the endpoint:**
+- Call `llm_signal()` directly with three inputs: a known GPT-4 output, a Project
+  Gutenberg paragraph, and a two-sentence haiku.
+- Check: does the function return a dict with `ai_probability` in [0, 1] for all three?
+- Check: does GPT-4 output score higher than the human paragraph?
+- Check: does a malformed Groq response fall back gracefully rather than raising?
+
+---
+
+### M4 — Signal 2 + Confidence Scoring
+
+**Spec sections provided as context:**
+- Signal 2 definition: six sub-metrics, output shape, weighting
+- Confidence scoring: blend formula, asymmetry bias zone, thresholds table
+- Uncertainty representation: what 0.5, 0.62, 0.80 mean to the system
+
+**What to request:**
+1. `stylo_signal(text: str) → dict` function: computes all six sub-metrics, returns
+   `{ ai_probability: float, sub_metrics: { ... }, note: str }`. Pure Python, no imports
+   beyond `re` and `statistics`.
+2. `blend_signals(llm_ai_prob, stylo_ai_prob) → float` function: weighted blend
+   (60/40) plus asymmetry bias for [0.40, 0.65] zone. Returns final score.
+3. `label_variant(final_score) → str` function: applies thresholds (≥ 0.72 → "high_ai",
+   ≤ 0.28 → "high_human", else "uncertain").
+
+**Verification:**
+- Run `stylo_signal()` on the same three test inputs from M3.
+- Check: does sentence-length-variance sub-metric score higher for the human paragraph
+  (more variable) than the GPT-4 output (more uniform)?
+- Run `blend_signals(0.75, 0.55)` → expect ~0.67 (above the bias zone).
+- Run `blend_signals(0.55, 0.45)` → expect ~0.495 (in bias zone, pulled to ~0.446).
+- Run `label_variant()` on scores 0.10, 0.50, 0.80 → expect "high_human", "uncertain",
+  "high_ai" respectively.
+
+---
+
+### M5 — Production layer (labels, appeals, rate limiting, audit log)
+
+**Spec sections provided as context:**
+- Transparency label variants: exact headline, body, CTA, badge text for all three
+- Appeals workflow: status changes, what gets logged, response shape
+- API contract for `POST /appeal` and `GET /log`
+- Rate limiting rationale and chosen values
+- Audit log schema (full column list)
+
+**What to request:**
+1. `make_label(variant: str, confidence: float) → dict` function: returns the exact
+   label object for each of the three variants, with `{N}%` interpolated from confidence.
+2. `POST /appeal` route: validates fields, looks up submission, updates status to
+   `under_review`, writes appeal row to audit_log, returns structured response.
+3. `GET /log` route: paginated query of audit_log ordered by most recent first.
+4. Flask-Limiter configuration: 10/min · 50/hr · 100/day on `/submit`; 5/hr on `/appeal`.
+5. SQLite init and `write_decision()` / `write_appeal()` helpers.
+
+**Verification:**
+- Hit `POST /submit` → check response includes `label.headline` and `label.body` text
+  matching the spec variants.
+- Hit `POST /appeal` with a known content_id → check `GET /log` shows both the original
+  decision row and the appeal row, and submission status is `under_review`.
+- Hit `POST /appeal` again with the same content_id → check it returns "already under
+  review" without creating a duplicate.
+- Hit `POST /submit` 11 times in one minute from the same IP → check the 11th returns 429.
+- Check all three label variants are reachable: submit text that scores high-AI, high-human,
+  and uncertain, and verify each returns the correct `label.variant`.
+
+---
+
 ## Stretch Features (planned)
 
 - [ ] Ensemble detection (3+ signals with documented weighting)
