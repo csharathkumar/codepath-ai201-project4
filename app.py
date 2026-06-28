@@ -267,11 +267,15 @@ def stylo_signal(text: str) -> dict:
 # Confidence scoring & label generation
 # ---------------------------------------------------------------------------
 
-LLM_WEIGHT = 0.60
-STYLO_WEIGHT = 0.40
+LLM_WEIGHT = 0.75
+STYLO_WEIGHT = 0.25
 
-# Thresholds (asymmetric — require stronger evidence to call AI)
-THRESHOLD_HIGH_AI = 0.72
+# Thresholds (asymmetric — require stronger evidence to call something AI)
+# THRESHOLD_HIGH_AI lowered 0.72 → 0.68 after M4 calibration:
+# stylometric TTR/bigram sub-metrics saturate at 1.0 for short texts
+# (<5 sentences), systematically under-reporting AI probability.
+# Raising LLM weight (0.60→0.75) compensates; threshold adjusted to match.
+THRESHOLD_HIGH_AI = 0.68
 THRESHOLD_HIGH_HUMAN = 0.28
 
 

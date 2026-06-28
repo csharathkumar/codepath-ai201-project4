@@ -415,7 +415,7 @@ No parameters. Returns `{ "status": "ok", "service": "provenance-guard" }`.
 The raw blended score is:
 
 ```
-blend = 0.60 × llm_ai_prob + 0.40 × stylo_ai_prob
+blend = 0.75 × llm_ai_prob + 0.25 × stylo_ai_prob
 ```
 
 **Asymmetry bias:** A false positive (labeling human work as AI) is worse than a false
@@ -428,12 +428,21 @@ if 0.40 <= blend <= 0.65:
 ```
 
 **Label thresholds:**
-- `final >= 0.72` → HIGH-CONFIDENCE AI
+- `final >= 0.68` → HIGH-CONFIDENCE AI
 - `final <= 0.28` → HIGH-CONFIDENCE HUMAN
 - otherwise → UNCERTAIN
 
 These asymmetric thresholds mean the system requires stronger evidence to call
 something AI-generated than to call it human-written.
+
+**M4 calibration note:** Original weights were 0.60/0.40 with HIGH_AI threshold 0.72.
+Live testing revealed that stylometric TTR and bigram-ratio sub-metrics saturate at 1.0
+for short texts (< 5 sentences) because there are too few words for repetition to
+appear, regardless of AI vs. human origin. A clearly AI-generated 3-sentence paragraph
+(LLM score 0.80, stylo score 0.32) blended to 0.548 — uncertain — despite the LLM
+signal being unambiguous. Weights adjusted to 0.75/0.25 and threshold lowered to 0.68
+so a strong LLM signal (≥ 0.80) can reach the HIGH_AI zone without a cooperating
+stylometric signal. Verified against all 4 M4 calibration inputs.
 
 ---
 
