@@ -498,17 +498,19 @@ def submit():
 def appeal():
     """
     POST /appeal
-    Body: { "content_id": str, "creator_id": str, "reason": str }
+    Body: { "content_id": str, "creator_reasoning": str, "creator_id"?: str }
+    Accepts "reason" as an alias for "creator_reasoning".
     """
     body = request.get_json(silent=True) or {}
     content_id = body.get("content_id", "").strip()
     creator_id = body.get("creator_id", "").strip()
-    reason = body.get("reason", "").strip()
+    # Accept "creator_reasoning" (spec field) or "reason" (alias)
+    reason = (body.get("creator_reasoning") or body.get("reason") or "").strip()
 
     if not content_id:
         return jsonify({"error": "'content_id' is required."}), 400
     if not reason:
-        return jsonify({"error": "'reason' is required — please explain why you believe the classification is incorrect."}), 400
+        return jsonify({"error": "'creator_reasoning' is required — please explain why you believe the classification is incorrect."}), 400
 
     db = get_db()
     row = db.execute(

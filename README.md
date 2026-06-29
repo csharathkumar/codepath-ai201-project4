@@ -217,6 +217,18 @@ The label displayed to readers on the platform has three variants. **Exact text 
 
 ---
 
+**Live label variant test (M5):**
+
+| Input | Variant | Confidence |
+|---|---|---|
+| Casual human review (ramen) | `high_human` | 0.217 |
+| Formal AI paragraph | `high_ai` | 0.681 |
+| Formal academic prose (borderline) | `uncertain` | 0.436 |
+
+All three variants confirmed reachable end-to-end.
+
+---
+
 ## Appeals Workflow
 
 1. Creator calls `POST /appeal` with their `content_id` and `reason`.
@@ -263,6 +275,23 @@ The adversarial model for `/submit`: an actor trying to probe the classifier's d
 boundary would need to make hundreds of requests. At 100/day per IP, that requires many
 IPs, which raises the cost of abuse. A legitimate creator submitting one piece of work
 per sitting never hits any limit.
+
+**Live rate limit test** (12 rapid requests against the 10/min limit):
+
+```
+200  ← request 1
+200  ← request 2
+200  ← request 3
+200  ← request 4
+200  ← request 5
+200  ← request 6
+200  ← request 7
+200  ← request 8
+200  ← request 9
+200  ← request 10
+429  ← rate limit hit
+429  ← rate limit hit
+```
 
 ---
 
