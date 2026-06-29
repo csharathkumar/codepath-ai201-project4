@@ -104,7 +104,7 @@ but a language model reads naturally.
 The model returns a verdict and confidence. The prompt explicitly instructs it to prefer
 "uncertain" when evidence is mixed, honouring the false-positive asymmetry requirement.
 
-**Weight: 0.60** (primary signal)
+**Weight: 0.75** (primary signal — raised from 0.60 after M4 calibration; see Confidence Scoring)
 
 ### Signal 2 — Stylometric Heuristics (pure Python)
 
@@ -122,11 +122,20 @@ Computes six statistical properties of the text:
 Each sub-metric produces a [0,1] human-likeness score; the signal's AI probability is
 `1 − mean(sub_metrics)`.
 
-**Weight: 0.40** (supporting signal — structurally independent of Signal 1)
+**Weight: 0.25** (supporting signal — structurally independent of Signal 1; reduced from 0.40 after M4 calibration)
 
 These two signals are **genuinely independent**: LLM analysis is semantic/pragmatic;
 stylometric analysis is purely statistical/structural. Combining them is more
 informative than either alone.
+
+**Why these two signals?** The LLM signal captures things that are nearly impossible
+to quantify — whether a text "sounds" machine-generated, overuses hedging phrases, or
+lacks the personal idiosyncrasy of human voice. The stylometric signal captures what
+the LLM can't be audited for: measurable surface statistics that don't depend on
+interpretation. If both agree, confidence is high. If they disagree, the system
+defaults to uncertain. This disagreement case is itself informative — it often flags
+the hardest cases (academic human prose, lightly-edited AI) where honest uncertainty
+is the right answer.
 
 ---
 
@@ -177,7 +186,7 @@ threshold to 0.68. Post-fix results across all 4 inputs:
 
 The label displayed to readers on the platform has three variants. **Exact text below:**
 
-### High-Confidence AI (`confidence ≥ 0.72`)
+### High-Confidence AI (`confidence ≥ 0.68`)
 
 > **Headline:** Likely AI-Generated
 >
@@ -202,7 +211,7 @@ The label displayed to readers on the platform has three variants. **Exact text 
 >
 > **Badge:** Human-Written
 
-### Uncertain (`confidence 0.29 – 0.71`)
+### Uncertain (`confidence 0.29 – 0.67`)
 
 > **Headline:** Origin Uncertain
 >
@@ -438,9 +447,10 @@ the uncertain label body ("may reflect a mix of approaches").
 
 **Why asymmetric thresholds?**
 On a creative platform, being falsely accused of using AI is a reputational harm.
-The system requires a higher P(AI) score (0.72) to issue a high-confidence AI label
-than the mirror score needed for a high-confidence human label (0.28). The gray zone
-is intentionally wide.
+The system requires a P(AI) score of ≥ 0.68 to issue a high-confidence AI label,
+versus ≤ 0.28 for high-confidence human. The gray zone (0.29–0.67) is intentionally
+wide — a score of 0.60 and a score of 0.30 both say "uncertain," but the label body
+and call-to-action differ based on which end of that range you're on.
 
 **Why SQLite?**
 Zero-dependency, ships with Python, perfectly adequate for the scale of a portfolio
@@ -451,3 +461,76 @@ Two genuinely independent signals (semantic + structural) were prioritized over 
 weakly-independent ones. The LLM signal already aggregates many semantic sub-signals
 internally. Adding a third heuristic (e.g., perplexity) would increase complexity
 without meaningfully changing calibration.
+
+---
+
+## Known Limitations
+
+**Short texts (< 5 sentences) produce unreliable stylometric scores.** The TTR
+(type-token ratio) and unique bigram ratio sub-metrics both approach 1.0 for any text
+under ~60 words, regardless of whether it's AI or human — because there simply aren't
+enough words for repetition to appear. This means the stylometric signal contributes
+near-zero discrimination for short submissions, and the system effectively relies
+entirely on the LLM signal. Observed live: a two-sentence human-written passage scored
+uncertain rather than high-human because the stylometric signal read 0.42 (AI-leaning)
+purely due to having only two sentences to measure variance across.
+
+**Formally written human prose is the primary false-positive risk.** A human who writes
+in a clean, structured style — academic, legal, or technical — produces text that
+both signals read as AI-like. The LLM signal sees uniform tone and smooth transitions;
+the stylometric signal sees low sentence-length variance and below-average punctuation
+density. The asymmetric threshold (0.68) and bias zone reduce but don't eliminate this
+risk. This is why the appeal path is always surfaced for uncertain and AI results.
+
+**What we'd change for real deployment:** The stylometric signal's normalization ranges
+were calibrated on general web text. A production system would retrain these ranges
+on platform-specific writing (creative fiction, poetry, personal essays) and track
+calibration drift over time as AI writing styles evolve. The LLM signal's prompts
+would also need periodic updates as newer AI systems get better at mimicking human
+idiosyncrasy.
+
+---
+
+## Spec Reflection
+
+**One way the spec guided implementation well:** The requirement to write out the three
+label variants verbatim before writing any code forced a concrete UX decision upfront.
+The uncertain label text — specifically the phrase "may reflect a mix of approaches,
+an unusually polished human voice, or limitations of our analysis" — gave the
+implementation a clear target that was already user-tested in language before being
+wired up. Without that, it's easy to produce a label that's technically accurate but
+reads as accusatory or confusing to a creator.
+
+**One way the implementation diverged from the spec:** The original confidence scoring
+in `planning.md` specified a 60/40 LLM/stylometric weight split. Live testing on
+real inputs (M4) showed that this split produces uncertain for clearly AI-generated
+short texts because the stylometric signal degrades for < 5 sentences. The weights
+were adjusted to 75/25 and the HIGH_AI threshold lowered from 0.72 to 0.68. The
+asymmetry design principle stayed intact — the change was calibration, not philosophy.
+This is documented in `planning.md` under the M4 calibration note so the divergence
+is traceable.
+
+---
+
+## AI Usage
+
+**Instance 1 — Flask app skeleton and signal functions.**
+Provided the architecture diagram and detection signals spec from `planning.md` and
+asked for: (1) the Flask app with `POST /submit`, `POST /appeal`, and `GET /log`
+routes, (2) the `llm_signal()` function calling Groq with a structured JSON prompt,
+and (3) the `stylo_signal()` function computing all six sub-metrics. The generated
+code was reviewed and revised before use: the LLM signal's `ai_probability` conversion
+logic was rewritten entirely — the original used a direct confidence passthrough that
+didn't handle the "uncertain" verdict correctly. The conversion now maps each verdict
+type to a probability range explicitly (`uncertain` → [0.35, 0.65]) rather than
+treating all verdicts symmetrically.
+
+**Instance 2 — Confidence scoring calibration.**
+After M4 live testing showed the 60/40 blend was under-weighting the LLM signal
+for short texts, the calibration fix was worked out analytically (pre-computing
+blend values for each observed LLM/stylo score pair) before being applied to the
+code. The AI tool was used to verify the arithmetic and check that all four
+calibration inputs produced the expected labels under the new 75/25/0.68 parameters.
+The bias zone logic (`blend * 0.90` for [0.40, 0.65]) was human-designed and not
+generated — it reflects the specific asymmetry requirement that false positives are
+worse than false negatives, which the tool had no context to derive.
